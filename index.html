@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Quản lí Phiếu Bài Tập - Giáo Viên</title>
+    <style>
+        body { font-family: sans-serif; display: flex; margin: 0; height: 100vh; background-color: #f0f2f5; }
+        .sidebar { width: 320px; background: white; padding: 20px; box-shadow: 2px 0 5px rgba(0,0,0,0.1); overflow-y: auto; }
+        .main-content { flex: 1; display: flex; flex-direction: column; overflow: auto; padding: 20px; align-items: center; }
+        .toolbar { width: 100%; display: flex; justify-content: space-between; margin-bottom: 20px; }
+        button { background: #007bff; color: white; border: none; padding: 10px 15px; border-radius: 5px; cursor: pointer; font-size: 14px; }
+        button:hover { background: #0056b3; }
+        .btn-save { background: #28a745; transition: all 0.3s ease; }
+        .btn-save:hover { background: #218838; }
+        .btn-danger { background: #dc3545; }
+        .btn-danger:hover { background: #c82333; }
+        .btn-duplicate { background: #17a2b8; margin-right: 10px; }
+        .canvas-container { position: relative; background: white; box-shadow: 0 4px 10px rgba(0,0,0,0.1); }
+        .canvas-container img { max-width: 100%; display: block; }
+        .input-box { position: absolute; border: 2px dashed #007bff; background: rgba(0, 123, 255, 0.1); cursor: move; box-sizing: border-box; display: flex; align-items: center; justify-content: center; }
+        .input-box.selected { border-color: #ffc107; background: rgba(255, 193, 7, 0.2); z-index: 10; }
+        .resize-handle { position: absolute; width: 10px; height: 10px; background: #007bff; right: -5px; bottom: -5px; cursor: nwse-resize; border-radius: 50%; }
+        .preview-text { color: #666; pointer-events: none; }
+        .form-group { margin-bottom: 15px; }
+        .form-group label { display: block; margin-bottom: 5px; font-weight: bold; font-size: 14px; }
+        .form-group input[type="text"], .form-group input[type="number"] { width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; }
+        .checkbox-group { display: flex; align-items: center; gap: 10px; cursor: pointer; }
+    </style>
+</head>
+<body>
+
+<div class="sidebar" id="properties-panel" style="display: none;">
+    <h3>Thuộc tính ô</h3>
+    <div class="form-group checkbox-group">
+        <input type="checkbox" id="prop-autotik" onchange="updateBoxProperty('autoGrade', this.checked)">
+        <label for="prop-autotik" style="margin: 0;">Chấm điểm tự động</label>
+    </div>
+    <div class="form-group" id="group-answer">
+        <label>Đáp án đúng (ngăn cách bởi dấu /)</label>
+        <input type="text" id="prop-answer" oninput="updateBoxProperty('answer', this.value)">
+    </div>
+    <div class="form-group" id="group-points">
+        <label>Điểm</label>
+        <input type="number" id="prop-points" oninput="updateBoxProperty('points', this.value)" min="0">
+    </div>
+    <div class="form-group">
+        <label>Cỡ chữ (px)</label>
+        <input type="number" id="prop-fontsize" oninput="updateBoxProperty('fontSize', this.value)" min="12" max="72">
+    </div>
+    <div class="form-group">
+        <label>Chiều rộng (%)</label>
+        <input type="number" id="prop-width" oninput="updateBoxProperty('width', this.value)">
+    </div>
+    <div class="form-group">
+        <label>Chiều cao (%)</label>
+        <input type="number" id="prop-height" oninput="updateBoxProperty('height', this.value)">
+    </div>
+    <div style="display: flex; justify-content: space-between; margin-top: 20px;">
+        <button class="btn-duplicate" onclick="duplicateSelectedBox()">Nhân bản</button>
+        <button class="btn-danger" onclick="deleteSelectedBox()">Xóa ô</button>
+    </div>
+</div>
+
+<div class="main-content">
+    <div class="toolbar">
+        <div>
+            <input type="file" id="bg-upload" accept="image/*" style="display: none;" onchange="loadBackgroundImage(event)">
+            <button onclick="document.getElementById('bg-upload').click()">Tải ảnh nền</button>
+        </div>
+        <button class="btn-save" onclick="saveToLocalStorage()">Lưu bài tập</button>
+    </div>
+    <div class="canvas-container" id="canvas" onclick="handleCanvasClick(event)">
+        <!-- Ảnh nền và các ô sẽ được thêm vào đây -->
+    </div>
+</div>
+
+<script>
+    let boxes = [];
+    let selectedBoxId = null;
+    let bgImageUrl = '';
+    const canvas = document.getElementById('canvas');
+    const propertiesPanel = document.getElementById('properties-panel');
+    let isDragging = false;
+    let isResizing = false;
+    let startX, startY, startW, startH, startLeft, startTop;
+
+    function loadBackgroundImage(event) {
+        const file = event.target.files[0];
+        if (file) {
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                bgImageUrl = e.target.result;
+                canvas.innerHTML = `<img src="${bgImageUrl}" id="bg-image" style="width: 100%;">`;
+                boxes = [];
+                propertiesPanel.style.display = 'none';
+            };
+            reader.readAsDataURL(file);
+        }
+    }
+
+    function handleCanvasClick(e) {
+        if (e.target.id === 'bg-image' || e.target.id === 'canvas') {
+            const rect = canvas.getBoundingClientRect();
+            const xPercent = ((e.clientX - rect.left) / rect.width) * 100;
+            const yPercent = ((e.clientY - rect.top) / rect.height) * 100;
+            createBox(xPercent, yPercent, 20, 5, '18', true, '', 1);
+        }
+    }
+
+    function createBox(x, y, w, h, fontSize, autoGrade, answer, points) {
+        const id = 'box_' + Date.now();
+        const boxData = { id, x, y, w, h, fontSize, autoGrade, answer, points };
+        boxes.push(boxData);
+        renderBox(boxData);
+        selectBox(id);
+    }
+
+    function renderBox(data) {
+        const boxEl = document.createElement('div');
+        boxEl.className = 'input-box';
+        boxEl.id = data.id;
+        updateBoxStyle(boxEl, data);
+        
+        boxEl.innerHTML = `<span class="preview-text" style="font-size: ${data.fontSize}px;">Aa</span><div class="resize-handle"></div>`;
+        
+        boxEl.onmousedown = (e) => startDrag(e, data.id);
+        const handle = boxEl.querySelector('.resize-handle');
+        handle.onmousedown = (e) => startResize(e, data.id);
+        
+        canvas.appendChild(boxEl);
+    }
+
+    function updateBoxStyle(element, data) {
+        element.style.left = data.x + '%';
+        element.style.top = data.y + '%';
+        element.style.width = data.w + '%';
+        element.style.height = data.h + '%';
+        const textSpan = element.querySelector('.preview-text');
+        if (textSpan) textSpan.style.fontSize = data.fontSize + 'px';
+    }
+
+    function selectBox(id) {
+        selectedBoxId = id;
+        document.querySelectorAll('.input-box').forEach(b => b.classList.remove('selected'));
+        const boxEl = document.getElementById(id);
+        if (boxEl) boxEl.classList.add('selected');
+        
+        const data = boxes.find(b => b.id === id);
+        if (data) {
+            propertiesPanel.style.display = 'block';
+            document.getElementById('prop-autotik').checked = data.autoGrade;
+            document.getElementById('prop-answer').value = data.answer;
+            document.getElementById('prop-points').value = data.points;
+            document.getElementById('prop-fontsize').value = data.fontSize;
+            document.getElementById('prop-width').value = Math.round(data.w * 10) / 10;
+            document.getElementById('prop-height').value = Math.round(data.h * 10) / 10;
+            
+            document.getElementById('group-answer').style.display = data.autoGrade ? 'block' : 'none';
+            document.getElementById('group-points').style.display = data.autoGrade ? 'block' : 'none';
+        }
+    }
+
+    function updateBoxProperty(prop, value) {
+        if (!selectedBoxId) return;
+        const data = boxes.find(b => b.id === selectedBoxId);
+        if (prop === 'autoGrade') {
+            data.autoGrade = value;
+            document.getElementById('group-answer').style.display = value ? 'block' : 'none';
+            document.getElementById('group-points').style.display = value ? 'block' : 'none';
+        } else {
+            data[prop] = value;
+        }
+        updateBoxStyle(document.getElementById(selectedBoxId), data);
+    }
+
+    function deleteSelectedBox() {
+        if (!selectedBoxId) return;
+        boxes = boxes.filter(b => b.id !== selectedBoxId);
+        document.getElementById(selectedBoxId).remove();
+        propertiesPanel.style.display = 'none';
+        selectedBoxId = null;
+    }
+
+    function duplicateSelectedBox() {
+        if (!selectedBoxId) return;
+        const data = boxes.find(b => b.id === selectedBoxId);
+        createBox(data.x + 2, data.y + 2, data.w, data.h, data.fontSize, data.autoGrade, data.answer, data.points);
+    }
+
+    // Xử lí phím tắt Cmd+D / Ctrl+D
+    document.addEventListener('keydown', function(e) {
+        if ((e.ctrlKey || e.metaKey) && e.key === 'd') {
+            e.preventDefault();
+            duplicateSelectedBox();
+        }
+    });
+
+    // Kéo thả di chuyển (Drag)
+    function startDrag(e, id) {
+        if (e.target.className === 'resize-handle') return;
+        isDragging = true;
+        selectBox(id);
+        const boxEl = document.getElementById(id);
+        startX = e.clientX;
+        startY = e.clientY;
+        startLeft = parseFloat(boxEl.style.left);
+        startTop = parseFloat(boxEl.style.top);
+        
+        document.onmousemove = drag;
+        document.onmouseup = stopDrag;
+    }
+
+    function drag(e) {
+        if (!isDragging) return;
+        const rect = canvas.getBoundingClientRect();
+        const dx = ((e.clientX - startX) / rect.width) * 100;
+        const dy = ((e.clientY - startY) / rect.height) * 100;
+        const data = boxes.find(b => b.id === selectedBoxId);
+        data.x = startLeft + dx;
+        data.y = startTop + dy;
+        updateBoxStyle(document.getElementById(selectedBoxId), data);
+    }
+
+    function stopDrag() {
+        isDragging = false;
+        document.onmousemove = null;
+        document.onmouseup = null;
+    }
+
+    // Kéo góc thay đổi kích thước (Resize)
+    function startResize(e, id) {
+        e.stopPropagation();
+        isResizing = true;
+        selectBox(id);
+        const boxEl = document.getElementById(id);
+        startX = e.clientX;
+        startY = e.clientY;
+        startW = parseFloat(boxEl.style.width);
+        startH = parseFloat(boxEl.style.height);
+        
+        document.onmousemove = resize;
+        document.onmouseup = stopResize;
+    }
+
+    function resize(e) {
+        if (!isResizing) return;
+        const rect = canvas.getBoundingClientRect();
+        const dx = ((e.clientX - startX) / rect.width) * 100;
+        const dy = ((e.clientY - startY) / rect.height) * 100;
+        const data = boxes.find(b => b.id === selectedBoxId);
+        data.w = Math.max(5, startW + dx);
+        data.h = Math.max(2, startH + dy);
+        updateBoxStyle(document.getElementById(selectedBoxId), data);
+        
+        document.getElementById('prop-width').value = Math.round(data.w * 10) / 10;
+        document.getElementById('prop-height').value = Math.round(data.h * 10) / 10;
+    }
+
+    function stopResize() {
+        isResizing = false;
+        document.onmousemove = null;
+        document.onmouseup = null;
+    }
+
+    // Chức năng lưu dữ liệu có hiệu ứng và thông báo
+    function saveToLocalStorage() {
+        if (!bgImageUrl) {
+            alert('Vui lòng tải ảnh nền trước khi lưu!');
+            return;
+        }
+        const worksheetData = {
+            bgImage: bgImageUrl,
+            boxes: boxes
+        };
+        localStorage.setItem('baiTapHienTai', JSON.stringify(worksheetData));
+
+        // Đổi chữ trên nút bấm
+        const saveBtn = document.querySelector('.btn-save');
+        const originalText = saveBtn.innerText;
+        saveBtn.innerText = 'Đã lưu thành công! ✓';
+        
+        // Tạo thông báo nổi ở góc màn hình
+        let toast = document.getElementById('toast-msg');
+        if (!toast) {
+            toast = document.createElement('div');
+            toast.id = 'toast-msg';
+            toast.style.cssText = 'position: fixed; bottom: 20px; right: 20px; background: #28a745; color: white; padding: 15px 25px; border-radius: 5px; box-shadow: 0 4px 10px rgba(0,0,0,0.2); z-index: 9999; transition: opacity 0.5s; font-size: 16px; font-weight: bold;';
+            document.body.appendChild(toast);
+        }
+        toast.innerText = 'Đã lưu bài! Cô có thể mở trang Học sinh để kiểm tra.';
+        toast.style.opacity = '1';
+
+        // Phục hồi nút và ẩn thông báo sau 3 giây
+        setTimeout(() => {
+            saveBtn.innerText = originalText;
+            toast.style.opacity = '0';
+        }, 3000);
+    }
+</script>
+</body>
+</html>
